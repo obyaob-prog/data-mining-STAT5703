@@ -1,0 +1,248 @@
+---
+title: "assignement 2 data mining"
+author: "yann"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+# NOTE (cleanup 2026-09-27): the original file loaded factoextra and ica twice
+# and re-loaded dplyr/gt in a later chunk. Consolidated here; analysis unchanged.
+# This Rmd was cleaned but NOT executed in this environment (R unavailable);
+# run it in RStudio to verify outputs against reports/RED_WINE_PCA_ICA.pdf.
+library(tidyverse)  # For data manipulation and visualization
+library(DT)         # Interactive tables
+library(ggplot2)    # Data visualization
+library(corrplot)   # Correlation plots
+library(skimr)
+library(FactoMineR) # PCA
+library(factoextra) # PCA visualization
+library(ica)        # ICA analysis
+library(ggpubr)     # Arrange multiple plots
+library(GGally)     # Pair plots
+library(plotly)     # Interactive 3D visualization
+library(ellipse)    # Ellipse plotting
+library(gt)
+library(dplyr)
+```
+
+
+# 1. Introduction
+The red wine quality dataset, sourced from the UCI Machine Learning Repository, contains 1,599 samples with 11 physicochemical properties  and a quality score ranging from 3 to 8, rated by tasters. The objective of this report is to analyze the Red Wine Quality dataset and extract meaningful insights about the factors influencing wine quality by doing PCA and ICA analysis. 
+
+This dataset contains **physicochemical properties** (such as acidity, alcohol content, and sulfur dioxide levels) and a **quality rating** given by wine tasters.
+
+#### 2. Data Loading and Preprocessing
+```{r}
+
+RED_Wine <- read.csv("winequality-red.csv", sep=";", header=TRUE)
+
+# Display first 10 rows of RED_Wine dataset as a styled table
+RED_Wine %>%
+  head(5) %>%
+  gt() %>%
+  tab_header(
+    title = md("**Red Wine Quality Dataset**"),  # Bold title using markdown
+    subtitle = "First 10 Rows"
+  )
+```
+
+
+```{r}
+# Check for missing values
+sum(is.na(RED_Wine))  # Returns 0, no missing values
+```
+
+- No missing data simplifies analysis, ensuring reliability.
+
+#### 3. Exploratory Data Analysis (EDA)
+EDA helps understand data distribution and relationships before dimensionality reduction.
+
+##### 3.1 Distribution of Wine Quality Scores
+We visualize the frequency of quality scores to assess distribution.
+
+```{r}
+quality_counts <- as.data.frame(table(RED_Wine$quality))
+colnames(quality_counts) <- c("Quality", "Count")
+
+# Pie chart
+ggplot(quality_counts, aes(x = "", y = Count, fill = factor(Quality))) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  geom_text(aes(label = paste0(Quality, "\n", round(Count / sum(Count) * 100, 1), "%")), 
+            position = position_stack(vjust = 0.5), size = 5, color = "black", fontface = "bold") +
+  scale_fill_brewer(palette = "Reds") +
+  theme_void() +
+  ggtitle("Quality Distribution")
+
+# Bar plot
+ggplot(quality_counts, aes(x = factor(Quality), y = Count, fill = factor(Quality))) +
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "Reds") +
+  theme_minimal() +
+  labs(title = "Quality Count", x = "Quality", y = "Count")
+```
+
+
+##### 3.2 Correlation Matrix
+We examine feature correlations to identify relationships.
+
+```{r}
+cor_matrix <- cor(RED_Wine %>% select(-quality))
+
+# Plot correlation heatmap with background gradient
+corrplot(cor_matrix, method = "color", col = colorRampPalette(c("#67001f", "#f7f7f7", "#053061"))(200), type = "upper", tl.cex = 0.8, tl.col = "black")
+```
+
+- Strong correlations exist: `fixed.acidity` ties to `density` (denser wines are more acidic), and `alcohol` has a mild positive link to quality (~0.47), suggesting it boosts quality. These relationships guide PCA’s focus, highlighting interdependencies like acidity-density links.
+
+##### 3.3 Multiple Histograms for All Features
+We plot histograms to understand feature distributions.
+
+```{r}
+features <- colnames(RED_Wine)
+par(mfrow = c(3, 4))
+for (feature in features) {
+  hist(RED_Wine[[feature]], main = paste("Histogram of", feature), col = "#800E13", probability = TRUE)
+  lines(density(RED_Wine[[feature]]), col = "black", lwd = 2)
+}
+```
+
+- Normal distributions (e.g., `alcohol`) suggest consistent properties, while skewed ones (e.g., `chlorides`) indicate outliers—wines with unusually high saltiness. This shapes PCA’s variance capture, as skewed features may dominate.
+
+##### 3.4 Scatterplots of Features vs. Quality
+We plot each feature against quality to identify trends.
+
+```{r}
+features <- colnames(RED_Wine)[-length(colnames(RED_Wine))]
+par(mfrow = c(4, 3), mar = c(4, 4, 2, 1))
+for (feature in features) {
+  plot(RED_Wine[[feature]], RED_Wine$quality, col = "#A2128E", pch = 16, main = paste(feature, "vs Quality"))
+  abline(lm(quality ~ RED_Wine[[feature]], data = RED_Wine), col = "black", lwd = 2)
+}
+par(mfrow = c(1,1))
+```
+
+- No single feature screams “quality predictor.” `alcohol`’s weak trend suggests it helps, but quality likely stems from a mix of factors—PCA and ICA will dig deeper, revealing combined effects.
+
+##### 3.5 Boxplots by Quality
+We compare feature distributions across quality levels.
+
+```{r}
+features <- colnames(RED_Wine)[-length(colnames(RED_Wine))]
+par(mfrow = c(3, 4), mar = c(4, 4, 2, 1))
+for (feature in features) {
+  boxplot(RED_Wine[[feature]] ~ RED_Wine$quality, col = "red", main = paste(feature, "Distribution by Quality"), xlab = "Quality", ylab = feature, outline = TRUE, border = "black", lwd = 2.5)
+}
+par(mfrow = c(1,1))
+```
+
+- Subtle shifts emerge—higher `alcohol` and lower `volatile.acidity` tie to better wines (7–8). Overlaps in boxes show these aren’t strict rules, just hints, suggesting quality is a blend of factors.
+
+
+
+#### 4. Principal Component Analysis (PCA)
+PCA reduces dimensionality by identifying directions of maximum variance, helping simplify the data.
+
+##### 4.1 Setup and Standardization
+We standardize the data to ensure equal contribution.
+```{r}
+wine_scaled <- scale(RED_Wine %>% select(-quality))
+pca_result <- prcomp(wine_scaled)
+```
+
+##### 4.2 Scree Plot
+We visualize variance explained by each component.
+```{r}
+fviz_eig(pca_result, addlabels = TRUE, barfill = "red", barcolor = "black")
+```
+
+**Comments:**
+- Nearly half the variation is in the first two PCs—good, but not enough to fully explain quality. PC3 onward adds detail incrementally, suggesting we might need more components for a complete picture.
+
+##### 4.3 Individual Factor Map
+We plot wines on PC1 vs. PC2, colored by fit.
+
+```{r}
+fviz_pca_ind(pca_result, col.ind = "cos2", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"))
+```
+
+
+**Comments:**
+- Wines spread in a cloud—PC1 (28.2%) and PC2 (17.5%) explain 45.7% of variation. No clear groups mean these components capture broad differences, not quality-specific ones, aligning with.
+
+##### 4.4 Variable Contributions
+We examine feature influence on PCs.
+
+```{r}
+fviz_pca_var(pca_result, col.var = "contrib", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"))
+```
+
+**Comments:**
+- Acidity and density dominate PC1, alcohol and sulphates PC2. These are the “big levers” of wine variation—key for reporting, as they align with chemical properties affecting taste and structure.
+
+##### 4.5 PCA by Quality
+We color by quality to check separation.
+
+```{r}
+plot(pca_result$x[, 1:2], col = RED_Wine$quality, main = "PCA of Red Wine Dataset")
+legend("topright", legend = unique(RED_Wine$quality), col = unique(RED_Wine$quality), pch = 1)
+```
+
+
+**Comments:**
+- Quality doesn’t separate in PC1/PC2—overlaps suggest quality isn’t just about these main differences, indicating a need for deeper analysis.
+
+
+#### 5. Independent Component Analysis (ICA)
+ICA seeks statistically independent components, potentially revealing hidden factors.
+
+##### 5.1 Perform ICA
+We extract five independent components.
+```{r}
+set.seed(42)
+ica_result <- icafast(wine_scaled, nc = 5)
+```
+
+##### 5.2 Visualizing ICA Components
+
+We plot each component’s values.
+```{r}
+par(mfrow = c(2, 3))
+for (i in 1:5) {
+  plot(ica_result$S[, i], type = "l", col = "red", main = paste("ICA Component", i))
+}
+par(mfrow = c(1, 1))
+```
+
+
+
+**Comments:**
+- Spikes flag wines with unique profiles—maybe high acidity or sulfur. Each component captures a distinct “flavor,” suggesting multiple independent chemical signatures, potentially tied to quality nuances.
+
+##### 5.3 Scatterplot of ICA Components
+We check relationships between components.
+
+```{r}
+pairs(ica_result$S, col = "blue", pch = 20, main = "Scatterplot of ICA Components")
+```
+
+
+**Comments:**
+- No correlations confirm independence—ICA isolates unique signals, unlike PCA’s blended view, offering a fresh lens on wine chemistry.
+
+##### 5.4 ICA Density Plot
+We plot the distribution of each component.
+
+```{r}
+ica_density_plots <- list()
+for (i in 1:5) {
+  ica_density_plots[[i]] <- ggplot(data = data.frame(ICA = ica_result$S[, i]), aes(x = ICA)) +
+    geom_density(fill = "blue", alpha = 0.4) +
+    labs(title = paste("Density Plot of ICA Component", i))
+}
+ggarrange(plotlist = ica_density_plots, ncol = 2, nrow = 3)
+```

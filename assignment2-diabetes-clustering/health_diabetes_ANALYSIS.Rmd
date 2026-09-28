@@ -1,0 +1,413 @@
+---
+title: "health diabete"
+author: "yann"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+
+
+
+## Introduction  
+Clustering analysis is a technique that groups similar observations into a number of clusters based on the observed values of several variables for each observation.  
+
+In this project, Clustering Analysis will be employed to group individuals with similar conditions based on the diabetes health indicators dataset into clusters, which can be valuable to the health industry, medical professionals, and nutritionists.  
+
+We will explore various clustering techniques like K-Means, Partitioning Around Medoids (PAM), Clustering Large Applications (CLARA), and Hierarchical Clustering.  
+
+ Original Dataset  
+```{r}
+diabetes_data <- read.csv("diabetes_binary_5050split_health_indicators_BRFSS2015.csv")
+sprintf("The original dataset has %s observations with a total of %s features.", nrow(diabetes_data), ncol(diabetes_data))
+
+```
+
+### Description of Variables  
+- **HighBP**: 0 = no high BP, 1 = high BP  
+- **HighChol**: 0 = no high cholesterol, 1 = high cholesterol  
+- **CholCheck**: 0 = no cholesterol check in 5 years, 1 = yes cholesterol check in 5 years  
+- **BMI**: Body Mass Index  
+- **MentHlth**: days of poor mental health scale 1-30 days  
+- **DiffWalk**: difficulty walking or climbing stairs? 0 = no, 1 = yes  
+- **Age**: 13-level age category (1=18-24, 5=40-44, 6=45-49, 8=55-59, 13=80 or older)  
+- **Income**: scale 1-8; 1 = less than $10,000, 8 = $75,000 or more  
+- **Education**: scale 1-6 (1 = Never attended school/only kindergarten, 2 = elementary)  
+
+
+For clustering analysis,let’s work with a subset of the original dataset with 3535 observations (5% of original observations), the reason is while doing the report with the full data set i encounter some difficulties:
+
+-Clustering algorithms, particularly hierarchical clustering and partitioning methods like K-Means, can be computationally expensive, especially as the size of the dataset grows. The full dataset contains 70692 observations, which would require significant computational resources and time to process. By using a smaller subset (5% of the data), the analysis becomes more manageable and faster to execute, especially when prototyping or testing different clustering approaches.
+
+-Ease of Visualization and Interpretation
+Visualizing clustering results is a critical part of the analysis, as it helps in understanding the structure and patterns in the data. However, visualizing clusters for a large dataset 70,692  was challenging and lead to cluttered or uninterpretable plots. By using a smaller subset, the results are easier to visualize and interpret, making it simpler to identify meaningful patterns and groupings.
+
+-my laptop start bugging as well !
+
+*The subset was randomly sampled to ensure it was representative of the full dataset, allowing the clustering results to be meaningful and generalizable. While the full dataset could provide more comprehensive insights, the subset approach strikes a balance between practicality and analytical rigor, making it a suitable choice for this exploratory analysis.
+
+```{r}
+# NOTE: set.seed(123) is kept AFTER the sampling, exactly as in the original file.
+# The 5% subset therefore differs from run to run; the seed stabilizes the
+# clustering steps that follow (k-means, CLARA, ...).
+diabetes_df <- diabetes_data[sample(1:nrow(diabetes_data), 3535, replace=FALSE), ]
+sprintf("The new dataset has %s observations with a total of %s features.", nrow(diabetes_df), ncol(diabetes_df))
+set.seed(123)
+```
+
+-Packages Used for Analysis  
+# NOTE (cleanup 2026-09-27): duplicate library() calls removed; set consolidated.
+# This Rmd was cleaned but NOT executed in this environment (R unavailable);
+# run it in RStudio to verify outputs against reports/health-diabetes-ANALYSIS.pdf.
+```{r}
+library(corrplot)
+library(stats)
+library(factoextra)
+library(ggplot2)
+library(gridExtra)
+library(ggplotify)
+library(cluster)
+library(flexclust)
+library(fpc)
+library(ClusterR)
+library(ggpubr)
+library(dplyr)
+library(knitr)
+library(tidyr)
+
+```
+
+
+## Data Preprocessing and Analysis  
+
+-Dataset Structure  
+```{r}
+str(diabetes_df)
+```
+
+-Missing Values  
+```{r}
+sprintf("The dataset contains %s missing values.", sum(is.na(diabetes_df)))
+```
+
+-Dataset Normalization using Z-score  
+Data normalization helps to avoid some features having a larger impact on the analysis outcome because they have larger values than others, as features are of different scales.  
+
+```{r}
+diabetes_df_norm <- as.data.frame(scale(diabetes_df[, 2:ncol(diabetes_df)]))
+```
+
+
+### pie chart for diabetes binary 
+```{r}
+# Count occurrences of each category in Diabetes_binary
+diabetes_counts <- table(diabetes_df$Diabetes_binary)
+
+# Convert to a data frame for ggplot
+df_pie <- data.frame(
+  Category = c("No Diabetes (0)", "Diabetes (1)"),
+  Count = as.numeric(diabetes_counts)
+)
+
+# Calculate percentages
+df_pie$Percentage <- round(df_pie$Count / sum(df_pie$Count) * 100, 1)
+
+# Create a pie chart with percentages inside
+ggplot(df_pie, aes(x = "", y = Count, fill = Category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = c("lightblue", "salmon")) +
+  geom_text(aes(label = paste0(Percentage, "%")), 
+            position = position_stack(vjust = 0.5), 
+            size = 5, color = "black") +
+  ggtitle("Distribution of Diabetes in the Dataset") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+### Correlation Matrix  
+```{r}
+corr_matrix <- cor(diabetes_df_norm)
+corrplot(corr_matrix, type = "lower", method = "square")
+```
+
+The correlation matrix shows some strong positive correlation (GenHlth, PhysHlth, DiffWalk, Education, Income) and some slightly strong negative correlation (Income, GenHlth).  
+
+
+###histogram of all the variables 
+```{r}
+# Histograms for Each Variable
+diabetes_df_norm %>% 
+  gather(key = "Variable", value = "Value") %>% 
+  ggplot(aes(x = Value)) + 
+  geom_histogram(fill = "blue", color = "black", bins = 30) + 
+  facet_wrap(~Variable, scales = "free") + 
+  theme_minimal()
+```
+
+
+### Outliers Detection using IQR Rule  
+```{r}
+# NOTE (bug fix 2026-09-27): loop bounds were named `max`/`min`, shadowing base R's
+# max()/min() for every later chunk in the session. Renamed to hi_lim/lo_lim;
+# outlier counts are unchanged.
+var <- colnames(diabetes_df_norm)
+outlier <- c()
+for (i in var) {
+  hi_lim <- quantile(diabetes_df_norm[, i], 0.75) + (IQR(diabetes_df_norm[, i]) * 1.5)
+  lo_lim <- quantile(diabetes_df_norm[, i], 0.25) - (IQR(diabetes_df_norm[, i]) * 1.5)
+  idx <- which(diabetes_df_norm[, i] < lo_lim | diabetes_df_norm[, i] > hi_lim)
+  print(paste(i, length(idx), sep = " "))
+  outlier <- c(outlier, idx)
+}
+```
+
+There are quite a large number of outliers present in HeartDiseaseorAttack, Veggies, MentHlth, and PhysHlth.  
+
+### Clusterability Assessment  
+Let’s run Hopkins statistic to assess the clusterability of the data. Using `get_clust_tendency`, if the value of the Hopkins statistic is closer to 1, we do not reject the null hypothesis and conclude that the dataset is not significantly clusterable.  
+
+```{r}
+diabetes_hstat <- get_clust_tendency(diabetes_df_norm, n = 20, graph = FALSE)
+diabetes_hstat$hopkins_stat
+```
+
+However, we will proceed with clustering analysis to see if we can find any groupings.  
+
+---
+
+## Optimal Number of Clusters  
+Using the Average Silhouette method to find the optimal number of clusters for K-Means, PAM, CLARA, and Hierarchical Clustering.  
+
+### K-Means and Hierarchical Clustering  
+```{r}
+k <- fviz_nbclust(diabetes_df_norm, FUNcluster = kmeans, method = "silhouette") + ggtitle("K-Means")
+h <- fviz_nbclust(diabetes_df_norm, FUNcluster = hcut, method = "silhouette") + ggtitle("Hierarchical")
+grid.arrange(k, h, ncol = 2)
+```
+
+### PAM and CLARA Clustering
+```{r}
+k <- fviz_nbclust(diabetes_df_norm, FUNcluster = pam, method = "silhouette") + ggtitle("PAM")
+h <- fviz_nbclust(diabetes_df_norm, FUNcluster = clara, method = "silhouette") + ggtitle("CLARA")
+grid.arrange(k, h, ncol = 2)
+```
+
+## Clustering Analysis  
+
+### K-Means Clustering  
+K-means is a centroid-based clustering algorithm, where we calculate the distance between each data point and a centroid to assign it to a cluster. Its goal is to minimize the differences within a cluster and maximize the differences between two clusters.  
+
+```{r}
+# Using the elbow method, let’s confirm the optimal number of clusters to be used for K-Means Clustering Analysis.
+Optimal_Clusters_KMeans(diabetes_df_norm, max_clusters=10, plot_clusters = TRUE)
+```
+
+The Elbow Plot suggests that the optimal number of clusters is 2, as it explains 95% of the variance, and adding more clusters only slightly improves the explained variance. This means that dividing the data into two groups effectively captures most of the patterns. However, we also test 3 clusters to explore potential hidden structures in the data. A third cluster may provide better segmentation, distinguishing an intermediate group that might not be visible with only two clusters. Additionally, while the elbow method is a useful guideline, real-world data often requires further validation through silhouette scores and domain knowledge to ensure meaningful grouping. By comparing 2 and 3 clusters, we aim to balance simplicity with accuracy, ensuring that the selected number of clusters provides the most useful insights for decision-making. 
+
+```{r}
+diabetes_df_km2 <- kmeans(diabetes_df_norm, centers = 2, nstart = 25)
+diabetes_df_km3 <- kmeans(diabetes_df_norm, centers = 3, nstart = 25)
+```
+
+
+
+### K-Means Cluster Visualization with  2 and 3 cluster  
+```{r}
+#K-Means Cluster Visualization with  2 cluster 
+clus_2 <- fviz_cluster(list(data = diabetes_df_norm, cluster = diabetes_df_km2$cluster), 
+                       ellipse.type = "norm", geom = "point", stand = FALSE, palette = "jco", 
+                       ggtheme = theme_classic()) + stat_mean(aes(color = cluster), size = 6)
+df_sil2 <- silhouette(diabetes_df_km2$cluster, dist(diabetes_df_norm))
+sil_2 <- fviz_silhouette(df_sil2)
+
+
+#K-Means Cluster Visualization with  3 cluster
+clus_3 <- fviz_cluster(list(data = diabetes_df_norm, cluster = diabetes_df_km3$cluster), 
+                       ellipse.type = "norm", geom = "point", stand = FALSE, palette = "jco", 
+                       ggtheme = theme_classic()) + stat_mean(aes(color = cluster), size = 6)
+
+df_sil3 <- silhouette(diabetes_df_km3$cluster, dist(diabetes_df_norm))
+sil_3 <- fviz_silhouette(df_sil3)
+```
+
+
+```{r}
+#K-Means Cluster Visualization with  2 cluster
+grid.arrange(clus_2, sil_2, ncol = 2)
+
+#K-Means Cluster Visualization with  3 cluster
+grid.arrange(clus_3, sil_3, ncol = 2)
+```
+
+
+
+## K-Means Cluster Statistics
+```{r}
+#2CLUSTER 
+stat_km2 <- cclust(diabetes_df_norm, 2, dist="euclidean")
+stripes(stat_km2)
+#3 CLUSTER 
+stat_km3 <- cclust(diabetes_df_norm, 3, dist="euclidean")
+stripes(stat_km3)
+```
+
+
+
+---
+
+## Clustering Analysis
+
+### Partitioning Around Medoids (PAM)  
+It is more robust than K-Means in the presence of noise and outliers because a medoid is less influenced by outliers or other extreme values.  
+
+Let’s apply PAM using 2 and 3 clusters.  
+
+```{r}
+diabetes_df_pam2 <- pam(diabetes_df_norm, 2) 
+diabetes_df_pam3 <- pam(diabetes_df_norm, 3)
+```
+
+### PAM Cluster Visualization  
+```{r}
+#2CLUSTER 
+clus_2_pam <- fviz_cluster(diabetes_df_pam2, geom = "point", ellipse.type = "convex", stand = FALSE, palette = "jco", ggtheme = theme_classic())
+
+pam_sil2 <- fviz_silhouette(silhouette(diabetes_df_pam2))
+
+
+#3 CLUSTER 
+
+clus_3_pam <- fviz_cluster(diabetes_df_pam3, geom = "point", ellipse.type = "convex",stand=FALSE, palette="jco", ggtheme=theme_classic())
+
+pam_sil3 <- fviz_silhouette(silhouette(diabetes_df_pam3))
+```
+
+
+
+```{r}
+#GRID FOR 2 CLUSTER
+grid.arrange(clus_2_pam, pam_sil2, ncol=2)
+
+
+#GRID FOR 3 CLUSTER 
+grid.arrange(clus_3_pam, pam_sil3, ncol=2)
+```
+
+It is observed that PAM clustered the dataset better using 2 clusters with a higher average silhouette index compared to clustering with 3 clusters. Just like K-Means, Cluster 2 had a larger observation size.  
+
+---
+
+### Clustering Large Applications (CLARA)  
+Let’s also apply the CLARA clustering algorithm using 2 and 3 clusters.  
+
+```{r}
+diabetes_df_clara2 <- eclust(diabetes_df_norm, "clara", k = 2)
+diabetes_df_clara3 <- eclust(diabetes_df_norm, "clara", k = 3)
+```
+
+### CLARA Cluster Visualization  
+```{r}
+#FOR 2 CLUSTER 
+clus_2_cla <- fviz_cluster(diabetes_df_clara2, palette = c("#00AFBB", "goldenrod4", "#E7B800"), ellipse.type = "t", geom = "point", pointsize = 1, ggtheme = theme_classic())
+
+cla_sil2 <- fviz_silhouette(diabetes_df_clara2)
+
+#FOR 3 CLUSTER
+
+clus_3_cla <- fviz_cluster(diabetes_df_clara3, palette = c("#00AFBB", "goldenrod4", "#E7B800"), ellipse.type = "t", geom = "point", pointsize = 1, ggtheme = theme_classic())
+
+cla_sil3 <- fviz_silhouette(diabetes_df_clara3)
+```
+
+
+
+
+
+```{r}
+#FOR 2 CLUSTER 
+grid.arrange(clus_2_cla, cla_sil2, ncol = 2)
+
+#FOR 3 CLUSTER 
+grid.arrange(clus_3_cla, cla_sil3, ncol = 2)
+```
+
+---
+
+### Hierarchical Clustering  
+It produces a set of nested clusters organized as a hierarchical tree and may be visualized as a dendrogram.  
+
+#### Using Gap Statistics  
+Let’s confirm the optimal number of clusters to be used for Hierarchical Clustering Analysis.  
+
+```{r}
+# NOTE: the original ran the gap statistic on the unnormalized frame; kept as-is.
+gap_stat <- clusGap(diabetes_df, FUN = hcut, nstart = 25, K.max = 5, B = 50)
+fviz_gap_stat(gap_stat)
+```
+The number of cluster here for hierachical is 2, this mean that the data naturally groups into 2 distinct patient profiles based on their health indicators. These clusters represent  the number of people  who have diabetes and those who do not. here we will use k=2 but also k=3 to avoid missing some important grouping.
+
+#### Hierarchical Clustering Using Complete Linkage Method and Ward’s Method  
+```{r}
+diabetes_df_matrix <- dist(diabetes_df_norm, method = "euclidean")
+```
+
+##### Complete Linkage Method  
+```{r}
+diabetes_df_hc <- hclust(diabetes_df_matrix, method = "complete")
+plot(diabetes_df_hc, cex = 0.6, hang = -1, main = "Dendrogram with Complete Linkage")
+rect.hclust(diabetes_df_hc, k = 2, border = 'red')
+```
+
+##### linkage method  Clusters  
+```{r}
+# 2 CLUSTER 
+diabetes_df_c2 <- cutree(diabetes_df_hc, k = 2)
+table(diabetes_df_c2)
+
+#3 CLUSTER 
+diabetes_df_c3 <- cutree(diabetes_df_hc, k = 3)
+table(diabetes_df_c3)
+```
+
+##### Ward’s Linkage Method  
+```{r}
+diabetes_df_hc_w <- hclust(diabetes_df_matrix, method = "ward.D2")
+plot(diabetes_df_hc_w, cex = 0.6, hang = -1, main = "Dendrogram with Ward Linkage")
+rect.hclust(diabetes_df_hc_w, k = 2, border = 'red')
+```
+
+##### ward's method  Clusters  
+```{r}
+#2 CLUSTER
+diabetes_df_w2 <- cutree(diabetes_df_hc_w, k = 2)
+table(diabetes_df_w2)
+
+#3CLUSTER
+diabetes_df_w3 <- cutree(diabetes_df_hc_w, k = 3)
+table(diabetes_df_w3)
+```
+
+### Agglomerative Coefficient  
+Measures the strength of the clustering structure found. A value closer to 1 suggests a strong cluster structure.  
+
+##### Complete Linkage Method   
+```{r}
+diabetes_hc <- agnes(diabetes_df_norm, method = "complete")
+diabetes_hc$ac
+```
+
+###### AND WARD'S METHOD 
+```{r}
+diabetes_hc_w <- agnes(diabetes_df_norm, method = "ward" )
+diabetes_hc_w$ac
+```
+
+## Summary  
+The main goal of this analysis was to apply **clustering techniques** to the **Diabetes Health Indicators dataset** and identify meaningful groupings within the data. Initially, K-Means clustering suggested **two clusters**, likely representing individuals with and without diabetes. However, while running the sample ramdomly i found that  **Hierarchical Clustering revealed five distinct clusters** gives 5 clusters, indicating that the dataset may have more complex groupings based on health indicators such as **BMI, blood pressure, cholesterol levels, and physical activity**. Despite this, the clusters were **not perfectly separated**, suggesting some overlap in patient profiles, which may be due to the continuous nature of the variables and the lack of strongly defined boundaries between different risk groups.
+
+Given the presence of **overlapping clusters**, **Hierarchical Clustering remains useful**, particularly **Ward’s Linkage**, which is known for handling outliers better and producing compact clusters. However, other robust clustering methods such as **PAM (Partitioning Around Medoids) and CLARA (Clustering Large Applications)** may be preferable for refining results, especially in datasets with **noise and potential misclassifications**. Future research could involve **hybrid clustering approaches** or **combining clustering with predictive models** to better understand patient segmentation and improve risk stratification. These insights could help **healthcare professionals design more targeted diabetes prevention and intervention strategies**, ensuring that patients receive the appropriate level of care based on their unique health profiles.

@@ -1,0 +1,725 @@
+---
+title: "final project data mining"
+author: "Group 4"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  word_document: default
+---
+
+#Required library
+```{r}
+# NOTE (cleanup 2026-09-27): the original file repeated library() calls in almost
+# every chunk (corrplot was loaded twice). All imports are consolidated here;
+# analysis code is unchanged. This Rmd was cleaned but NOT executed in this
+# environment (R unavailable); run it in RStudio to verify outputs against
+# reports/final-project-data-mining.docx.
+library(corrplot)
+library(stats)
+library(factoextra)
+library(ggplot2)
+library(gridExtra)
+library(ggplotify)
+library(cluster)
+library(flexclust)
+library(fpc)
+library(ClusterR)
+library(ggpubr)
+library(dplyr)
+library(knitr)
+library(tidyr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+
+
+#Data checking and cleaning
+
+#load data set
+```{r}
+# Define the column names
+column_names <- c("symboling", "normalized_losses", "make", "fuel_type", "aspiration",
+                  "num_of_doors", "body_style", "drive_wheels", "engine_location",
+                  "wheel_base", "length", "width", "height", "curb_weight",
+                  "engine_type", "num_of_cylinders", "engine_size", "fuel_system",
+                  "bore", "stroke", "compression_ratio", "horsepower", "peak_rpm",
+                  "city_mpg", "highway_mpg", "price")
+
+# Read the dataset and assign the column names
+data <- read.csv("imports-85.data", header = FALSE, col.names = column_names)
+
+# Display the first few rows
+head(data)
+
+```
+
+# Data shape 
+```{r}
+
+# ----- Data Shape -----
+# Display the dimensions (rows, columns)
+cat("Original Data Shape (rows, columns):", dim(data), "\n")
+
+
+```
+
+
+## set as numeric the numerical data  and categoric the categorical data
+```{r}
+# --- Convert Numerical Columns ---
+data$normalized_losses  <- as.numeric(as.character(data$normalized_losses))
+data$symboling          <- as.numeric(as.character(data$symboling))
+data$wheel_base         <- as.numeric(as.character(data$wheel_base))
+data$length             <- as.numeric(as.character(data$length))
+data$width              <- as.numeric(as.character(data$width))
+data$height             <- as.numeric(as.character(data$height))
+data$curb_weight        <- as.numeric(as.character(data$curb_weight))
+data$engine_size        <- as.numeric(as.character(data$engine_size))
+data$bore               <- as.numeric(as.character(data$bore))
+data$stroke             <- as.numeric(as.character(data$stroke))
+data$compression_ratio  <- as.numeric(as.character(data$compression_ratio))
+data$horsepower         <- as.numeric(as.character(data$horsepower))
+data$peak_rpm           <- as.numeric(as.character(data$peak_rpm))
+data$city_mpg           <- as.numeric(as.character(data$city_mpg))
+data$highway_mpg        <- as.numeric(as.character(data$highway_mpg))
+data$price              <- as.numeric(as.character(data$price))
+
+# --- Convert Categorical Columns ---
+data$make               <- as.factor(as.character(data$make))
+data$fuel_type          <- as.factor(as.character(data$fuel_type))
+data$aspiration         <- as.factor(as.character(data$aspiration))
+data$num_of_doors       <- as.factor(as.character(data$num_of_doors))
+data$body_style         <- as.factor(as.character(data$body_style))
+data$drive_wheels       <- as.factor(as.character(data$drive_wheels))
+data$engine_location    <- as.factor(as.character(data$engine_location))
+data$engine_type        <- as.factor(as.character(data$engine_type))
+data$num_of_cylinders   <- as.factor(as.character(data$num_of_cylinders))
+data$fuel_system        <- as.factor(as.character(data$fuel_system))
+
+```
+
+# Check for Missing values 
+```{r}
+# Replace all occurrences of "?" with NA
+data[data == "?"] <- NA
+
+# ----- Check Missing Values -----
+# Calculate the number of missing values per column
+missing_counts <- sapply(data, function(x) sum(is.na(x)))
+cat("Missing values in each column:\n")
+print(missing_counts)
+
+
+```
+
+There are   4 missing values 
+
+#fill missing values
+```{r}
+data_cleaned<-data
+# Loop over all columns in the data frame
+for (col_name in names(data_cleaned)) {
+  # Check if the current column is numeric
+  if (is.numeric(data[[col_name]])) {
+    # Calculate the mean of the column while ignoring NA values
+    mean_val <- mean(data_cleaned[[col_name]], na.rm = TRUE)
+    
+    # Replace NA values with the calculated mean
+    data_cleaned[[col_name]][is.na(data_cleaned[[col_name]])] <- mean_val
+  }
+}
+# for num_of_door since it as 2 missing values 
+# ----- Fill Missing Values for the Categorical Column "num_of_doors" -----
+# Check if the column exists in the data
+if ("num_of_doors" %in% names(data_cleaned)) {
+  # If the column is a factor, ensure four" is one of its levels
+  if (is.factor(data_cleaned$num_of_doors)) {
+    if (!("four" %in% levels(data_cleaned$num_of_doors))) {
+      levels(data_cleaned$num_of_doors) <- c(levels(data_cleaned$num_of_doors), "four")
+    }
+  } else {
+    # If not a factor, convert to character for imputation
+    data_cleaned$num_of_doors <- as.character(data_cleaned$num_of_doors)
+  }
+  
+  # Replace NA values with "four"
+  data_cleaned$num_of_doors[is.na(data_cleaned$num_of_doors)] <- "four"
+  
+  # Convert the column back to factor (if desired)
+  data_cleaned$num_of_doors <- as.factor(data_cleaned$num_of_doors)
+}
+
+# ----- Check Missing Values  for new data -----
+# Calculate the number of missing values per column
+missing_counts <- sapply(data_cleaned, function(x) sum(is.na(x)))
+cat("Missing values of new data_cleaned:\n")
+print(missing_counts)
+
+```
+
+#Check duplicated value
+```{r}
+# ----- Check Duplicated Values -----
+# Count the number of duplicated rows in the cleaned data
+num_duplicates <- sum(duplicated(data_cleaned))
+cat("Number of duplicated rows:", num_duplicates, "\n")
+
+
+```
+
+
+
+# data summary
+```{r}
+
+
+# ----- Summary of the Data -----
+cat("Summary of data:\n")
+print(summary(data_cleaned))
+```
+
+
+# Data info 
+```{r}
+# ----- Data Information (Structure) -----
+cat("Structure data:\n")
+str(data_cleaned)
+
+
+```
+
+ 
+
+
+#Eda: Data visualisation
+
+
+
+#univariate Analysis
+
+#create numerical data
+```{r}
+# Create a data frame with only numeric columns from 'data'
+num_data <- data_cleaned[, sapply(data_cleaned, is.numeric)]
+
+```
+
+#distribution for numerical data
+```{r}
+
+# Loop over each numeric column in num_data
+for (col in names(num_data)) {
+  p <- ggplot(num_data, aes_string(x = col)) +
+    geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", color = "black", alpha = 0.6) +
+    geom_density(color = "red", size = 1) +
+    labs(title = paste("Distribution of", col),
+         x = col,
+         y = "Density") +
+    theme_minimal()
+  
+  print(p)
+}
+
+```
+
+
+# count for categorical data
+```{r}
+
+# Assuming you have a data frame 'categorical_data' that contains only categorical columns.
+# If not, you can create it as follows:
+ categorical_data <- data_cleaned[, !sapply(data_cleaned, is.numeric)]
+# categorical_data <- data.frame(lapply(categorical_data, as.factor))
+
+# Loop over each categorical column and create a count plot with vertical x-axis labels
+for (col in names(categorical_data)) {
+  p <- ggplot(categorical_data, aes_string(x = col, fill = col)) +
+    geom_bar(color = "black", alpha = 0.7) +
+    labs(title = paste("Count Plot for", col),
+         x = col,
+         y = "Count") +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+    )
+  
+  print(p)
+}
+
+
+
+
+```
+
+
+#Bivariate analysis 
+
+# box plot for Price vs Body Style
+```{r}
+
+# Create a box plot for Price vs Body Style
+p <- ggplot(data_cleaned, aes(x = body_style, y = price, fill = body_style)) +
+  geom_boxplot() +
+  labs(title = "Price vs Body Style",
+       x = "Body Style",
+       y = "Price") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "none")
+
+print(p)
+
+
+```
+
+
+#box plot for Price vs Make
+```{r}
+
+# Create a box plot for Price vs Make
+p <- ggplot(data_cleaned, aes(x = make, y = price, fill = make)) +
+  geom_boxplot() +
+  labs(title = "Price vs Make",
+       x = "Make",
+       y = "Price") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "none")
+
+print(p)
+
+```
+
+
+#Scatter plots for some numerical variables vs. Price
+```{r}
+
+# --- Scatter plots for numerical variables vs. Price ---
+
+p1 <- ggplot(data_cleaned, aes(x = engine_size, y = price)) +
+  geom_point(color = "blue", alpha = 0.7) +
+  labs(title = "Engine Size vs Price", x = "Engine Size", y = "Price") +
+  theme_minimal()
+
+p2 <- ggplot(data_cleaned, aes(x = horsepower, y = price)) +
+  geom_point(color = "darkgreen", alpha = 0.7) +
+  labs(title = "Horsepower vs Price", x = "Horsepower", y = "Price") +
+  theme_minimal()
+
+p3 <- ggplot(data_cleaned, aes(x = city_mpg, y = price)) +
+  geom_point(color = "purple", alpha = 0.7) +
+  labs(title = "City MPG vs Price", x = "City MPG", y = "Price") +
+  theme_minimal()
+
+# --- Scatter (jitter) plots for categorical variables vs. Price ---
+
+# Replace "Make vs Price" with "Num of Doors vs Price"
+p4 <- ggplot(data_cleaned, aes(x = num_of_doors, y = price, color = num_of_doors)) +
+  geom_jitter(width = 0.2, alpha = 0.7) +
+  labs(title = "Num of Doors vs Price", x = "Num of Doors", y = "Price") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "none")
+
+p5 <- ggplot(data_cleaned, aes(x = body_style, y = price, color = body_style)) +
+  geom_jitter(width = 0.2, alpha = 0.7) +
+  labs(title = "Body Style vs Price", x = "Body Style", y = "Price") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "none")
+
+p6 <- ggplot(data_cleaned, aes(x = fuel_type, y = price, color = fuel_type)) +
+  geom_jitter(width = 0.2, alpha = 0.7) +
+  labs(title = "Fuel Type vs Price", x = "Fuel Type", y = "Price") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        legend.position = "none")
+
+# --- Display each plot individually ---
+plots <- list(p1, p2, p3, p4, p5, p6)
+for (p in plots) {
+  print(p)
+}
+
+```
+
+
+# average price for each car model (top 20)
+```{r}
+# Load necessary libraries
+
+
+avg_prices_by_car <- data_cleaned %>%
+  group_by(make) %>%
+  summarise(avg_price = mean(price, na.rm = TRUE)) %>%
+  arrange(desc(avg_price))
+
+# Plot top N car models by average price
+n <- 20  # Number of top car models to plot
+top_car_models <- head(avg_prices_by_car, n)
+
+# Create a horizontal bar plot
+ggplot(top_car_models, aes(x = avg_price, y = reorder(make, avg_price))) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = paste("Top", n, "Car Models by Average Price"),
+       x = "Average Price",
+       y = "Car Model") +
+  theme_minimal()
+
+```
+
+#corroletion for numerical data 
+```{r}
+# Compute the correlation matrix using the numeric data frame
+cor_matrix <- cor(num_data, use = "complete.obs")
+
+# Plot the correlation matrix as a heatmap
+corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black", tl.srt = 45)
+```
+
+
+# data preprocessing /encoding
+```{r}
+# Identify categorical columns (non-numeric columns)
+Mle_data<- data_cleaned
+cat_cols <- names(Mle_data)[!sapply(Mle_data, is.numeric)]
+print("Categorical columns to encode:")
+print(cat_cols)
+
+# Loop over each categorical column and encode it as numeric
+for (col in cat_cols) {
+  Mle_data[[col]] <- as.numeric(as.factor(Mle_data[[col]]))
+}
+
+```
+
+
+#Unsupervised learning 
+
+# Outlier Detection 
+```{r}
+# Outlier Detection using IQR Rule
+auto_norm <- as.data.frame(scale(Mle_data))
+
+vars <- names(auto_norm)
+for (var in vars) {
+  Q1 <- quantile(auto_norm[[var]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(auto_norm[[var]], 0.75, na.rm = TRUE)
+  IQR_val <- IQR(auto_norm[[var]], na.rm = TRUE)
+  lower_bound <- Q1 - 1.5 * IQR_val
+  upper_bound <- Q3 + 1.5 * IQR_val
+  outlier_count <- length(which(auto_norm[[var]] < lower_bound | auto_norm[[var]] > upper_bound))
+  cat(paste(var, "outliers count:", outlier_count, "\n"))
+}
+```
+
+#Clusterability Assessment
+```{r}
+
+# Use the Hopkins statistic from factoextra to assess clustering tendency
+hopkins_stat <- get_clust_tendency(auto_norm, n = 20, graph = FALSE)$hopkins_stat
+cat("Hopkins statistic:", hopkins_stat, "\n")
+# (A value near 0.5 indicates clusterability, while values near 1 suggest randomness.)
+
+```
+
+#Average number of cluster
+```{r}
+
+### Average of number of cluster
+k <- fviz_nbclust(auto_norm, FUNcluster = kmeans, method = "silhouette") + ggtitle("K-Means")
+e <- fviz_nbclust(auto_norm, FUNcluster = clara, method = "silhouette") + ggtitle("CLARA")
+grid.arrange(k, e,  ncol = 2)
+```
+
+# kmeans 
+```{r}
+#Determine the Optimal Number of Clusters
+# Using the elbow method, let’s confirm the optimal number of clusters to be used for K-Means Clustering Analysis.
+Optimal_Clusters_KMeans(auto_norm, max_clusters=10, plot_clusters = TRUE)
+
+
+
+# K-Means Clustering
+
+set.seed(123)
+kmeans_result <- kmeans(auto_norm, centers = 2, nstart = 25)
+# Visualize K-Means clusters
+clus_kmeans <- fviz_cluster(list(data = auto_norm, cluster = kmeans_result$cluster),
+                            ellipse.type = "norm", geom = "point", stand = FALSE,
+                            palette = "jco", ggtheme = theme_classic())
+# Silhouette plot for K-Means
+df_sil_kmeans <- silhouette(kmeans_result$cluster, dist(auto_norm))
+sil_kmeans <- fviz_silhouette(df_sil_kmeans)
+grid.arrange(clus_kmeans, sil_kmeans, ncol = 2)
+
+
+stat_km2 <- cclust(auto_norm, 2, dist="euclidean")
+stripes(stat_km2)
+
+```
+
+
+
+
+#clara
+```{r}
+
+# CLARA Clustering
+
+set.seed(123)
+clara_result <- clara(auto_norm, k = 3, samples = 5)
+
+# Visualize CLARA clusters using factoextra
+clus_clara <- fviz_cluster(list(data = auto_norm, cluster = clara_result$clustering),
+                           ellipse.type = "norm", geom = "point", stand = FALSE,
+                           palette = "jco", ggtheme = theme_classic())
+
+# Create the silhouette plot for CLARA clustering
+df_sil_clara <- silhouette(clara_result$clustering, dist(auto_norm))
+sil_clara <- fviz_silhouette(df_sil_clara)
+
+# Arrange the cluster plot and silhouette plot side by side
+grid.arrange(clus_clara, sil_clara, ncol = 2)
+
+
+```
+
+
+#PCA 
+```{r}
+
+#  Perform PCA Analysis
+
+pca_res <- prcomp(auto_norm, center = TRUE, scale. = FALSE)
+
+# Get a summary of the PCA results
+pca_summary <- summary(pca_res)
+print(pca_summary)
+
+# Create a table of the PCA component loadings
+pca_loadings <- pca_res$rotation
+kable(round(pca_loadings, 3), caption = "PCA Component Loadings")
+
+
+#  Create a Scree Plot
+
+#  Calculate eigenvalues
+eigenvalues <- pca_res$sdev^2
+
+#  Create a data frame, making PC a factor with explicit levels
+scree_data <- data.frame(
+  PC = factor(paste0("PC", 1:length(eigenvalues)), 
+              levels = paste0("PC", 1:length(eigenvalues))),
+  Eigenvalue = eigenvalues
+)
+
+#  Plot the scree plot, ensuring the x-axis follows the factor order
+scree_plot <- ggplot(scree_data, aes(x = PC, y = Eigenvalue)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_line(aes(group = 1), color = "red", size = 1) +
+  geom_point(color = "red", size = 2) +
+  labs(title = "Scree Plot", x = "Principal Components", y = "Eigenvalue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+
+#  Create a PCA Biplot
+
+biplot_plot <- fviz_pca_biplot(pca_res,
+                               repel = TRUE,
+                               col.var = "blue",  # Variables color
+                               col.ind = "gray",  # Individuals color
+                               title = "PCA Biplot")
+
+# Display the Plots Side by Side
+
+grid.arrange(scree_plot, biplot_plot, ncol = 2)
+
+```
+
+
+#supervised learning 
+
+## Linear regression 
+```{r}
+#install.packages("caret")
+```
+
+```{r}
+
+set.seed(123)  # for reproducibility
+
+#  Split the Data into Training (70%) and Testing (30%) Sets ---
+train_index <- createDataPartition(auto_norm$price, p = 0.7, list = FALSE)
+train_data <- Mle_data[train_index, ]
+test_data <- Mle_data[-train_index, ]
+```
+
+
+
+```{r}
+#  Fit a Linear Regression Model on the Training Data
+model_1 <- lm(price ~ ., data = train_data)
+
+# Print the full model summary (R², coefficients, p-values, F-statistics, etc.)
+summary_model <- summary(model_1)
+print(summary_model)
+```
+
+
+
+```{r}
+#  Predict on the Test Set and Calculate MAE
+predictions <- predict(model_1, newdata = test_data)
+mae_val <- mean(abs(predictions - test_data$price))
+cat("Linear Regression MAE:", round(mae_val, 2), "\n")
+
+#  Perform 10-Fold Cross Validation for the Model 
+control <- trainControl(method = "cv", number = 10)
+set.seed(123)
+model_cv <- train(price ~ ., data = train_data, method = "lm", trControl = control)
+cv_score <- model_cv$results$Rsquared[1]
+cat("Cross Validation R-squared score:", round(cv_score, 2), "\n")
+```
+
+
+
+
+```{r}
+#  Plot Actual vs Predicted Price on the Test Set 
+plot_data <- data.frame(Actual = test_data$price, Predicted = predictions)
+p <- ggplot(plot_data, aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue", alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(title = "Actual vs Predicted Price",
+       x = "Actual Price",
+       y = "Predicted Price") +
+  theme_minimal()
+
+print(p)
+
+```
+
+
+
+
+```{r}
+# Create a data frame with actual values, predicted values, and differences for the first 10 test observations
+result_table <- data.frame(
+  Car = 1:10,
+  Actual = test_data$price[1:10],
+  Predicted = predictions[1:10]
+)
+
+# Compute the absolute differences for each car
+result_table$Difference <- abs(result_table$Actual - result_table$Predicted)
+
+# Print the table
+print(result_table)
+
+
+
+```
+
+
+## Decision Tree 
+```{r}
+# Load necessary libraries
+
+# Fit the Decision Tree Model 
+# Fit a regression tree using rpart with method "anova" for regression
+model_tree <- rpart(price ~ ., data = train_data, method = "anova")
+
+# Print model details and complexity parameter table
+print(model_tree)
+printcp(model_tree)
+```
+
+```{r}
+pred_tree <- predict(model_tree, newdata = test_data)
+plot_data <- data.frame(Actual = test_data$price, Predicted = pred_tree)
+p_tree <- ggplot(plot_data, aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue", alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(title = "Decision Tree: Actual vs Predicted Price",
+       x = "Actual Price",
+       y = "Predicted Price") +
+  theme_minimal()
+
+print(p_tree)
+```
+
+
+```{r}
+
+# Calculate Mean Absolute Error (MAE) for the tree model
+mae_tree <- mean(abs(test_data$price - pred_tree))
+cat("Decision Tree MAE: ", round(mae_tree, 2), "\n")
+```
+
+
+
+```{r}
+# Compute the sum of squared errors (SSE) and total sum of squares (SST)
+SSE <- sum((test_data$price - pred_tree)^2)
+SST <- sum((test_data$price - mean(test_data$price))^2)
+r_squared <- 1 - SSE/SST
+
+cat("Decision Tree R-squared:", round(r_squared, 2), "\n")
+
+```
+
+#random forest 
+```{r}
+#install.packages("randomForest")
+```
+
+```{r}
+# Load necessary libraries
+
+
+set.seed(123)  # For reproducibility
+
+#  Fit the Random Forest Model 
+# Using 500 trees; adjust ntree as needed
+model_rf <- randomForest(price ~ ., data = train_data, ntree = 500, importance = TRUE)
+
+#  Predict on the Test Set 
+pred_rf <- predict(model_rf, newdata = test_data)
+
+# Calculate MAE and R-squared 
+# Mean Absolute Error (MAE)
+mae_rf <- mean(abs(test_data$price - pred_rf))
+
+# R-squared Calculation
+SSE <- sum((test_data$price - pred_rf)^2)
+SST <- sum((test_data$price - mean(test_data$price))^2)
+r_squared_rf <- 1 - SSE/SST
+
+cat("Random Forest MAE:", round(mae_rf, 2), "\n")
+cat("Random Forest R-squared:", round(r_squared_rf, 2), "\n")
+```
+
+
+```{r}
+# Plot Actual vs Predicted Prices 
+plot_data_rf <- data.frame(Actual = test_data$price, Predicted = pred_rf)
+
+p_rf <- ggplot(plot_data_rf, aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue", alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(title = "Random Forest: Actual vs Predicted Price",
+       x = "Actual Price",
+       y = "Predicted Price") +
+  theme_minimal()
+
+print(p_rf)
+
+```
+
